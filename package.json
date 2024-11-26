@@ -1,0 +1,27 @@
+{
+  "name": "itis-6177-final-project-pdutch",
+  "version": "1.0.0",
+  "description": "ITIS-6177 final project",
+  "main": "text2speech.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fiery-duzi/ITIS-6177-final-project-pdutch.git"
+  },
+  "author": "Patrick Dutch",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/fiery-duzi/ITIS-6177-final-project-pdutch/issues"
+  },
+  "homepage": "https://github.com/fiery-duzi/ITIS-6177-final-project-pdutch#readme",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "express-validator": "^7.2.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.41.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
+  }
+}
