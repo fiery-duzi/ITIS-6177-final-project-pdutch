@@ -5,9 +5,13 @@ const { validationResult } = require('express-validator/lib')
 const swaggerJsDoc = require('swagger-jsdoc')
 const swaggerUi = require('swagger-ui-express')
 const cors = require('cors')
+const path = require('node:path');
+const crypto = require('crypto');
 
 const app = express()
 const port = 3000
+const audioFileOutputDir = "output";
+const audioFileExtension = ".mp3";
 const swaggerOptions = {
   swaggerDefinition: {
     info: {
@@ -31,8 +35,10 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
  * @swagger
  * /text2speech:
  *     post:
- *         description: Generates speech from text.
+ *         description: Generates speech from text, returning a key to retrieve the audio file.
  *         consumes:
+ *             - application/json
+ *         produces:
  *             - application/json
  *         parameters:
  *             - in: body
@@ -45,51 +51,102 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
  *                   properties:
  *                       text:
  *                           type: string
+ *                           example: I'm tired, boss.
  *                           maxLength: 100
  *         responses:
  *             200:
- *                 description: Successfully rendered text as speech.
+ *                 description: Successfully generated audio file with name given by fileKey.
+ *                 schema:
+ *                   type: object
+ *                   properties:
+ *                       fileKey:
+ *                           type: string
  *             400:
  *                 description: Invalid input.
+ *             500:
+ *                 description: Failed to generate speech for given text.
  */
-app.post('/text2speech', check('text').notEmpty().isLength({max: 100}), async (req, res) => {
+app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async (req, res) => {
   const result = validationResult(req);
+  const text = req.body.text;
   if (result.isEmpty()) {
-    const text = req.body.text;
-    var audioFile = "YourAudioFile.mp3";
-    // This example requires environment variables named "SPEECH_KEY" and "SPEECH_REGION"
+    generateSpeechFromText();
+  } else {
+    res.status(400).send({ errors: result.array() });
+  }
+
+  function md5Hash() {
+    return crypto.createHash("md5").update(text).digest("hex");
+  }
+
+  function generateSpeechFromText() {
+    const audioFileName = md5Hash();
+    const audioFile = `${audioFileOutputDir}/${audioFileName}${audioFileExtension}`;
+
     const speechConfig = sdk.SpeechConfig.fromSubscription(process.env.SPEECH_KEY, process.env.SPEECH_REGION);
-    const audioConfig = sdk.AudioConfig.fromAudioFileOutput(audioFile);
-
-    // The language of the voice that speaks.
     speechConfig.speechSynthesisVoiceName = "en-US-AvaMultilingualNeural";
+    const audioConfig = sdk.AudioConfig.fromAudioFileOutput(audioFile);
+    const synthesizer = new sdk.SpeechSynthesizer(speechConfig, audioConfig);
 
-    // Create the speech synthesizer.
-    var synthesizer = new sdk.SpeechSynthesizer(speechConfig, audioConfig);
-
+    const text2SpeechErrorMsg = "Failed to generate text to speech.";
     synthesizer.speakTextAsync(text,
       function (result) {
+        console.log(`Synthesize result: ${result.reason}`);
         if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
-          console.log("synthesis finished.");
+          res.json({
+            fileKey: audioFileName
+          });
         } else {
-          console.error("Speech synthesis canceled, " + result.errorDetails +
-            "\nDid you set the speech resource key and region values?");
+          res.status(500).send(text2SpeechErrorMsg);
         }
         synthesizer.close();
-        synthesizer = null;
       },
       function (err) {
-        console.trace("err - " + err);
+        console.error(err);
         synthesizer.close();
-        synthesizer = null;
+        res.status(500).send(text2SpeechErrorMsg);
       });
-    console.log("Now synthesizing to: " + audioFile);
-
-    return res.send(text);
   }
-  res.status(400).send({ errors: result.array() });
+})
+
+/**
+ * @swagger
+ * /text2speech/{fileKey}:
+ *     get:
+ *         description: Retrieves the previously generated audio file with given key.
+ *         produces:
+ *             - audio/mpeg
+ *         parameters:
+ *             - in: path
+ *               name: fileKey
+ *               required: true
+ *               type: string
+ *               description: The file to retrieve by key.  
+ *               example: 4fb17d8895bee64a574ff14bf44ad1fb     
+ *         responses:
+ *             200:
+ *                 description: Successfully retrieved the audio file.
+ *             400:
+ *                 description: Invalid input.
+ *             404:
+ *                 description: No file found with given key.
+ */
+app.get('/text2speech/:fileKey', check('fileKey').notEmpty().isLength({ max: 100 }), async (req, res) => {
+  const result = validationResult(req);
+  if (result.isEmpty()) {
+    retrieveAudioFile();
+  } else {
+    res.status(400).send({ errors: result.array() });
+  }
+
+  function retrieveAudioFile() {
+    const options = {
+      root: path.join(__dirname, audioFileOutputDir)
+    }
+    res.sendFile(req.params.fileKey + audioFileExtension, options);
+  }
 })
 
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`)
+  console.log(`text2speech app listening on port: ${port}`)
 })

@@ -1,6 +1,9 @@
 #PM2 config files
 ecosystem.config.js
 
+#Output dir
+output
+
 # Logs
 logs
 *.log
