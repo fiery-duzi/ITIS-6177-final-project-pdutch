@@ -6,6 +6,7 @@ const swaggerJsDoc = require('swagger-jsdoc')
 const swaggerUi = require('swagger-ui-express')
 const cors = require('cors')
 const path = require('node:path');
+const {accessSync, constants} = require('node:fs');
 const crypto = require('crypto');
 
 const app = express()
@@ -43,7 +44,7 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
  *         parameters:
  *             - in: body
  *               name: request
- *               description: The text to render as speech.
+ *               description: The text to render as speech. Max length is 100 characters.
  *               schema:
  *                   type: object
  *                   required:
@@ -128,10 +129,57 @@ app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async 
  *                 description: Successfully retrieved the audio file.
  *             400:
  *                 description: Invalid input.
+ */
+app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value => fileWithKeyExists(value)), async (req, res) => {
+  const result = validationResult(req);
+  const audioFileName = req.params.fileKey + audioFileExtension;
+  if (result.isEmpty()) {
+    retrieveAudioFile();
+  } else {
+    res.status(400).send({ errors: result.array() });
+  }
+
+  function retrieveAudioFile() {
+    const options = {
+      root: path.join(__dirname, audioFileOutputDir)
+    }
+    res.sendFile(audioFileName, options);
+  }
+})
+
+function fileWithKeyExists(fileKey) {
+  try {
+    accessSync(`${audioFileOutputDir}/${fileKey}${audioFileExtension}`, constants.F_OK);
+  } catch (error) {
+    // File was not found.
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @swagger
+ * /text2speech:
+ *     get:
+ *         description: Retrieves all previously generated audio file keys.
+ *         produces:
+ *             - audio/mpeg
+ *         parameters:
+ *             - in: path
+ *               name: fileKey
+ *               required: true
+ *               type: string
+ *               description: The file to retrieve by key.  
+ *               example: 4fb17d8895bee64a574ff14bf44ad1fb     
+ *         responses:
+ *             200:
+ *                 description: Successfully retrieved the audio file.
+ *             400:
+ *                 description: Invalid input.
  *             404:
  *                 description: No file found with given key.
  */
-app.get('/text2speech/:fileKey', check('fileKey').notEmpty().isLength({ max: 100 }), async (req, res) => {
+app.get('/text2speech/:fileKey', check('fileKey').isMD5(), async (req, res) => {
   const result = validationResult(req);
   if (result.isEmpty()) {
     retrieveAudioFile();
