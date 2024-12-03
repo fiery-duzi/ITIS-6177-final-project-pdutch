@@ -6,13 +6,14 @@ const swaggerJsDoc = require('swagger-jsdoc')
 const swaggerUi = require('swagger-ui-express')
 const cors = require('cors')
 const path = require('node:path');
-const {accessSync, constants} = require('node:fs');
+const { accessSync, constants, readdirSync } = require('node:fs');
 const crypto = require('crypto');
 
 const app = express()
 const port = 3000
 const audioFileOutputDir = "output";
 const audioFileExtension = ".mp3";
+const FILE_LIMIT = 100;
 const swaggerOptions = {
   swaggerDefinition: {
     info: {
@@ -66,6 +67,8 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
  *                 description: Invalid input.
  *             500:
  *                 description: Failed to generate speech for given text.
+ *             507:
+ *                 description: File storage limit has been reached.
  */
 app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async (req, res) => {
   const result = validationResult(req);
@@ -73,16 +76,32 @@ app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async 
   if (result.isEmpty()) {
     generateSpeechFromText();
   } else {
-    res.status(400).send({ errors: result.array() });
+    res.status(400).json({ errors: result.array() });
+  }
+
+  function hasGeneratedFileLimitBeenReached() {
+    const files = readdirSync(audioFileOutputDir);
+    return files.length > FILE_LIMIT;
   }
 
   function md5Hash() {
-    return crypto.createHash("md5").update(text).digest("hex");
+    // Hash the entire request body to tie generated audio file to request.
+    return crypto.createHash("md5").update(JSON.stringify(req.body)).digest("hex");
   }
 
   function generateSpeechFromText() {
     const audioFileName = md5Hash();
     const audioFile = `${audioFileOutputDir}/${audioFileName}${audioFileExtension}`;
+
+    if (fileWithKeyExists(audioFileName)) {
+      // File already exists, return the file key directly.
+      return res.json({ fileKey: audioFileName });
+    }
+
+    if (hasGeneratedFileLimitBeenReached()) {
+      // To avoid filling up the server, limit the number of files that can be generated.
+      return res.status(507).json({ error: "File storage limit has been reached. Please delete some files and try again." });
+    }
 
     const speechConfig = sdk.SpeechConfig.fromSubscription(process.env.SPEECH_KEY, process.env.SPEECH_REGION);
     speechConfig.speechSynthesisVoiceName = "en-US-AvaMultilingualNeural";
@@ -98,14 +117,14 @@ app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async 
             fileKey: audioFileName
           });
         } else {
-          res.status(500).send(text2SpeechErrorMsg);
+          res.status(500).json({ error: text2SpeechErrorMsg });
         }
         synthesizer.close();
       },
       function (err) {
         console.error(err);
         synthesizer.close();
-        res.status(500).send(text2SpeechErrorMsg);
+        res.status(500).json({ error: text2SpeechErrorMsg });
       });
   }
 })
@@ -136,7 +155,7 @@ app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value =>
   if (result.isEmpty()) {
     retrieveAudioFile();
   } else {
-    res.status(400).send({ errors: result.array() });
+    res.status(400).send(result.array());
   }
 
   function retrieveAudioFile() {
@@ -184,7 +203,7 @@ app.get('/text2speech/:fileKey', check('fileKey').isMD5(), async (req, res) => {
   if (result.isEmpty()) {
     retrieveAudioFile();
   } else {
-    res.status(400).send({ errors: result.array() });
+    res.status(400).send(result.array());
   }
 
   function retrieveAudioFile() {
