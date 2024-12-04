@@ -1,7 +1,6 @@
 const express = require('express')
 const sdk = require("microsoft-cognitiveservices-speech-sdk");
-const { check } = require('express-validator')
-const { validationResult } = require('express-validator/lib')
+const { check, validationResult } = require('express-validator')
 const swaggerJsDoc = require('swagger-jsdoc')
 const swaggerUi = require('swagger-ui-express')
 const cors = require('cors')
@@ -82,17 +81,25 @@ app.use(morgan('dev'));
  */
 app.post('/text2speech', [
   check('text').notEmpty().isLength({ max: 100 }),
-  check('voice').optional().isString()
+  check('voice').optional().isString().isLength({ max: 50 })
 ], async (req, res) => {
   const result = validationResult(req);
-  const text = req.body.text;
-  const voice = req.body.voice;
-
-  if (result.isEmpty()) {
-    generateSpeechFromText();
-  } else {
-    res.status(400).json({ errors: result.array() });
+  if (!result.isEmpty()) {
+    return res.status(400).send(result.array());
   }
+
+  const audioFileName = md5Hash();
+  if (fileWithKeyExists(audioFileName)) {
+    // File already exists, return the file key directly.
+    return res.json({ fileKey: audioFileName });
+  }
+
+  if (hasGeneratedFileLimitBeenReached()) {
+    // To avoid filling up the server, limit the number of files that can be generated.
+    return res.status(507).json({ error: "File storage limit has been reached. Please delete some files and try again." });
+  }
+
+  generateSpeechFromText();
 
   function hasGeneratedFileLimitBeenReached() {
     const files = readdirSync(audioFileOutputDir);
@@ -105,25 +112,14 @@ app.post('/text2speech', [
   }
 
   function generateSpeechFromText() {
-    const audioFileName = md5Hash();
     const audioFile = `${audioFileOutputDir}/${audioFileName}${audioFileExtension}`;
 
-    if (fileWithKeyExists(audioFileName)) {
-      // File already exists, return the file key directly.
-      return res.json({ fileKey: audioFileName });
-    }
-
-    if (hasGeneratedFileLimitBeenReached()) {
-      // To avoid filling up the server, limit the number of files that can be generated.
-      return res.status(507).json({ error: "File storage limit has been reached. Please delete some files and try again." });
-    }
-
-    speechConfig.speechSynthesisVoiceName = voice;
+    speechConfig.speechSynthesisVoiceName = req.body.voice;
     const audioConfig = sdk.AudioConfig.fromAudioFileOutput(audioFile);
     const synthesizer = new sdk.SpeechSynthesizer(speechConfig, audioConfig);
 
     const text2SpeechErrorMsg = "Failed to generate text to speech.";
-    synthesizer.speakTextAsync(text,
+    synthesizer.speakTextAsync(req.body.text,
       function (result) {
         console.log(`Synthesize result: ${result.reason}`);
         if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
@@ -168,11 +164,10 @@ app.post('/text2speech', [
 app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value => fileWithKeyExists(value)), async (req, res) => {
   const result = validationResult(req);
   const audioFileName = req.params.fileKey + audioFileExtension;
-  if (result.isEmpty()) {
-    retrieveAudioFile();
-  } else {
-    res.status(400).send(result.array());
+  if (!result.isEmpty()) {
+    return res.status(400).send(result.array());
   }
+  retrieveAudioFile();
 
   function retrieveAudioFile() {
     const options = {
@@ -205,27 +200,16 @@ app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value =>
 app.delete('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value => fileWithKeyExists(value)), async (req, res) => {
   const result = validationResult(req);
   const audioFileName = req.params.fileKey + audioFileExtension;
-  if (result.isEmpty()) {
-    deleteAudioFile();
-  } else {
-    res.status(400).send(result.array());
+  if (!result.isEmpty()) {
+    return res.status(400).send(result.array());
   }
+  deleteAudioFile();
 
   function deleteAudioFile() {
     unlinkSync(`${audioFileOutputDir}/${audioFileName}`);
     res.status(200).json({ message: "File successfully deleted." });
   }
 });
-
-function fileWithKeyExists(fileKey) {
-  try {
-    accessSync(`${audioFileOutputDir}/${fileKey}${audioFileExtension}`, constants.F_OK);
-  } catch (error) {
-    // File was not found.
-    return false;
-  }
-  return true;
-}
 
 /**
  * @swagger
@@ -321,3 +305,13 @@ app.get('/voices', [
 app.listen(port, () => {
   console.log(`text2speech app listening on port: ${port}`)
 })
+
+function fileWithKeyExists(fileKey) {
+  try {
+    accessSync(`${audioFileOutputDir}/${fileKey}${audioFileExtension}`, constants.F_OK);
+  } catch (error) {
+    // File was not found.
+    return false;
+  }
+  return true;
+}
