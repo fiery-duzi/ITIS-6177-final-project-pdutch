@@ -8,12 +8,16 @@ const cors = require('cors')
 const path = require('node:path');
 const { accessSync, constants, readdirSync, unlinkSync } = require('node:fs');
 const crypto = require('crypto');
+const morgan = require('morgan');
+const { SynthesisVoiceGender } = require('microsoft-cognitiveservices-speech-sdk/distrib/lib/src/sdk/VoiceInfo');
 
 const app = express()
 const port = 3000
 const audioFileOutputDir = "output";
 const audioFileExtension = ".mp3";
 const FILE_LIMIT = 100;
+const speechConfig = sdk.SpeechConfig.fromSubscription(process.env.SPEECH_KEY, process.env.SPEECH_REGION);
+
 const swaggerOptions = {
   swaggerDefinition: {
     info: {
@@ -31,12 +35,15 @@ const specs = swaggerJsDoc(swaggerOptions)
 app.use(express.json())
 app.use(cors())
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
+app.use(morgan('dev'));
 
 
 /**
  * @swagger
  * /text2speech:
  *     post:
+ *         tags:
+ *             - text2speech
  *         description: Generates speech from text, returning a key to retrieve the audio file.
  *         consumes:
  *             - application/json
@@ -45,7 +52,7 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
  *         parameters:
  *             - in: body
  *               name: request
- *               description: The text to render as speech. Max length is 100 characters.
+ *               description: The text to render as speech. Max length is 100 characters. Retrieve valid voices for the voice param with /voices.
  *               schema:
  *                   type: object
  *                   required:
@@ -55,6 +62,9 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
  *                           type: string
  *                           example: I'm tired, boss.
  *                           maxLength: 100
+ *                       voice:
+ *                           type: string
+ *                           example: en-US-AvaMultilingualNeural
  *         responses:
  *             200:
  *                 description: Successfully generated audio file with name given by fileKey.
@@ -70,9 +80,14 @@ app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
  *             507:
  *                 description: File storage limit has been reached.
  */
-app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async (req, res) => {
+app.post('/text2speech', [
+  check('text').notEmpty().isLength({ max: 100 }),
+  check('voice').optional().isString()
+], async (req, res) => {
   const result = validationResult(req);
   const text = req.body.text;
+  const voice = req.body.voice;
+
   if (result.isEmpty()) {
     generateSpeechFromText();
   } else {
@@ -103,8 +118,7 @@ app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async 
       return res.status(507).json({ error: "File storage limit has been reached. Please delete some files and try again." });
     }
 
-    const speechConfig = sdk.SpeechConfig.fromSubscription(process.env.SPEECH_KEY, process.env.SPEECH_REGION);
-    speechConfig.speechSynthesisVoiceName = "en-US-AvaMultilingualNeural";
+    speechConfig.speechSynthesisVoiceName = voice;
     const audioConfig = sdk.AudioConfig.fromAudioFileOutput(audioFile);
     const synthesizer = new sdk.SpeechSynthesizer(speechConfig, audioConfig);
 
@@ -133,6 +147,8 @@ app.post('/text2speech', check('text').notEmpty().isLength({ max: 100 }), async 
  * @swagger
  * /text2speech/{fileKey}:
  *     get:
+ *         tags:
+ *             - text2speech
  *         description: Retrieves the previously generated audio file with given key.
  *         produces:
  *             - audio/mpeg
@@ -170,6 +186,8 @@ app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value =>
  * @swagger
  * /text2speech/{fileKey}:
  *     delete:
+ *         tags:
+ *             - text2speech
  *         description: Deletes the previously generated audio file with the given key.
  *         parameters:
  *             - in: path
@@ -213,6 +231,8 @@ function fileWithKeyExists(fileKey) {
  * @swagger
  * /text2speech:
  *     get:
+ *         tags:
+ *             - text2speech
  *         description: Retrieves all previously generated audio file keys.
  *         produces:
  *             - application/json
@@ -229,7 +249,74 @@ app.get('/text2speech', async (req, res) => {
   res.json(files.map(file => file.replace(audioFileExtension, "")));
 })
 
+/**
+ * @swagger
+ * /voices:
+ *     get:
+ *         tags:
+ *             - voices
+ *         description: Retrieves a filtered list of available voices that can be used for text to speech.
+ *         produces:
+ *             - application/json
+ *         parameters:
+ *             - in: query
+ *               name: locale
+ *               required: false
+ *               type: string
+ *               description: The locale in BCP-47 format to filter voices by.
+ *               example: en-US - See [Supported Languages](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=tts#supported-languages) for options.
+ *             - in: query
+ *               name: gender
+ *               required: false
+ *               type: string
+ *               description: The gender to filter voices by.
+ *               enum: [Female, Male, Neutral]
+ *               example: Female
+ *         responses:
+ *             200:
+ *                 description: Successfully retrieved the list of voices.
+ *                 schema:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *             400:
+ *                 description: Invalid input.
+ */
+app.get('/voices', [
+  check('locale').optional().matches(/^[a-zA-Z0-9-]+$/).isLength({ max: 15 }),
+  check('gender').optional().isIn(['Female', 'Male', 'Neutral'])
+], async (req, res) => {
+  const result = validationResult(req);
+  if (!result.isEmpty()) {
+    return res.status(400).send(result.array());
+  }
 
+  const locale = req.query.locale;
+  const gender = req.query.gender;
+  const synthesizer = new sdk.SpeechSynthesizer(speechConfig);
+  try {
+    const result = await synthesizer.getVoicesAsync(locale);
+    if (result.reason === sdk.ResultReason.VoicesListRetrieved) {
+      let voices = result.voices;
+      if (gender) {
+        const genderEnum = {
+          Female: SynthesisVoiceGender.Female,
+          Male: SynthesisVoiceGender.Male,
+          Neutral: SynthesisVoiceGender.Neutral
+        };
+        voices = voices.filter(voice => voice.gender === genderEnum[gender]);
+      }
+      res.json(voices.map(voice => voice.shortName));
+    } else {
+      res.status(500).json({ error: "Failed to retrieve voices." });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to retrieve voices." });
+  } finally {
+    synthesizer.close();
+  }
+});
 
 app.listen(port, () => {
   console.log(`text2speech app listening on port: ${port}`)
