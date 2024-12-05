@@ -9,33 +9,16 @@ const { accessSync, constants, readdirSync, unlinkSync } = require('node:fs');
 const crypto = require('crypto');
 const morgan = require('morgan');
 const { SynthesisVoiceGender } = require('microsoft-cognitiveservices-speech-sdk/distrib/lib/src/sdk/VoiceInfo');
+const config = require('./config');
 
 const app = express()
-const port = 3000
-const audioFileOutputDir = "output";
-const audioFileExtension = ".mp3";
-const FILE_LIMIT = 100;
-const speechConfig = sdk.SpeechConfig.fromSubscription(process.env.SPEECH_KEY, process.env.SPEECH_REGION);
 
-const swaggerOptions = {
-  swaggerDefinition: {
-    info: {
-      title: 'Text to Speech API using Azure',
-      version: '1.3.3.7',
-      description: 'Patrick Dutch\'s ITIS-6177 final project. This API uses Azure Speech Service to render text to speech.'
-    },
-    host: '146.190.219.226:' + port,
-    basePath: '/'
-  },
-  apis: ['./text2speech.js']
-}
-const specs = swaggerJsDoc(swaggerOptions)
+const specs = swaggerJsDoc(config.swaggerOptions);
 
-app.use(express.json())
-app.use(cors())
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs))
+app.use(express.json());
+app.use(cors());
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(specs));
 app.use(morgan('dev'));
-
 
 /**
  * @swagger
@@ -72,12 +55,27 @@ app.use(morgan('dev'));
  *                   properties:
  *                       fileKey:
  *                           type: string
+ *                           example: 4fb17d8895bee64a574ff14bf44ad1fb
  *             400:
  *                 description: Invalid input.
+ *                 schema:
+ *                   $ref: '#/definitions/ValidationError'
  *             500:
  *                 description: Failed to generate speech for given text.
+ *                 schema:
+ *                   type: object
+ *                   properties:
+ *                     error:
+ *                       type: string
+ *                       example: "Failed to generate text to speech."
  *             507:
  *                 description: File storage limit has been reached.
+ *                 schema:
+ *                   type: object
+ *                   properties:
+ *                     error:
+ *                       type: string
+ *                       example: "File storage limit has been reached. Please delete some files and try again."
  */
 app.post('/text2speech', [
   check('text').notEmpty().isLength({ max: 100 }),
@@ -102,8 +100,8 @@ app.post('/text2speech', [
   generateSpeechFromText();
 
   function hasGeneratedFileLimitBeenReached() {
-    const files = readdirSync(audioFileOutputDir);
-    return files.length > FILE_LIMIT;
+    const files = readdirSync(config.audioFileOutputDir);
+    return files.length > config.fileLimit;
   }
 
   function md5Hash() {
@@ -112,11 +110,11 @@ app.post('/text2speech', [
   }
 
   function generateSpeechFromText() {
-    const audioFile = `${audioFileOutputDir}/${audioFileName}${audioFileExtension}`;
+    const audioFile = `${config.audioFileOutputDir}/${audioFileName}${config.audioFileExtension}`;
 
-    speechConfig.speechSynthesisVoiceName = req.body.voice;
+    config.speechConfig.speechSynthesisVoiceName = req.body.voice;
     const audioConfig = sdk.AudioConfig.fromAudioFileOutput(audioFile);
-    const synthesizer = new sdk.SpeechSynthesizer(speechConfig, audioConfig);
+    const synthesizer = new sdk.SpeechSynthesizer(config.speechConfig, audioConfig);
 
     const text2SpeechErrorMsg = "Failed to generate text to speech.";
     synthesizer.speakTextAsync(req.body.text,
@@ -158,12 +156,19 @@ app.post('/text2speech', [
  *         responses:
  *             200:
  *                 description: Successfully retrieved the audio file.
+ *                 content:
+ *                   audio/mpeg:
+ *                     schema:
+ *                       type: string
+ *                       format: binary
  *             400:
  *                 description: Invalid input.
+ *                 schema:
+ *                   $ref: '#/definitions/ValidationError'
  */
 app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value => fileWithKeyExists(value)), async (req, res) => {
   const result = validationResult(req);
-  const audioFileName = req.params.fileKey + audioFileExtension;
+  const audioFileName = req.params.fileKey + config.audioFileExtension;
   if (!result.isEmpty()) {
     return res.status(400).send(result.array());
   }
@@ -171,7 +176,7 @@ app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value =>
 
   function retrieveAudioFile() {
     const options = {
-      root: path.join(__dirname, audioFileOutputDir)
+      root: path.join(__dirname, config.audioFileOutputDir)
     }
     res.sendFile(audioFileName, options);
   }
@@ -194,21 +199,26 @@ app.get('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value =>
  *         responses:
  *             200:
  *                 description: Successfully deleted the audio file.
+ *                 schema:
+ *                   type: object
+ *                   properties:
+ *                     message:
+ *                       type: string
+ *                       example: "File successfully deleted."
  *             400:
  *                 description: Invalid input.
+ *                 schema:
+ *                   $ref: '#/definitions/ValidationError'
  */
 app.delete('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value => fileWithKeyExists(value)), async (req, res) => {
   const result = validationResult(req);
-  const audioFileName = req.params.fileKey + audioFileExtension;
+  const audioFileName = req.params.fileKey + config.audioFileExtension;
   if (!result.isEmpty()) {
     return res.status(400).send(result.array());
   }
-  deleteAudioFile();
 
-  function deleteAudioFile() {
-    unlinkSync(`${audioFileOutputDir}/${audioFileName}`);
-    res.status(200).json({ message: "File successfully deleted." });
-  }
+  unlinkSync(`${config.audioFileOutputDir}/${audioFileName}`);
+  res.status(200).json({ message: "File successfully deleted." });
 });
 
 /**
@@ -227,10 +237,11 @@ app.delete('/text2speech/:fileKey', check('fileKey').isMD5().bail().custom(value
  *                   type: array
  *                   items:
  *                     type: string
+ *                     example: 4fb17d8895bee64a574ff14bf44ad1fb
  */
 app.get('/text2speech', async (req, res) => {
-  const files = readdirSync(audioFileOutputDir);
-  res.json(files.map(file => file.replace(audioFileExtension, "")));
+  const files = readdirSync(config.audioFileOutputDir);
+  res.json(files.map(file => file.replace(config.audioFileExtension, "")));
 })
 
 /**
@@ -263,8 +274,11 @@ app.get('/text2speech', async (req, res) => {
  *                   type: array
  *                   items:
  *                     type: string
+ *                     example: en-US-AvaMultilingualNeural
  *             400:
  *                 description: Invalid input.
+ *                 schema:
+ *                   $ref: '#/definitions/ValidationError'
  */
 app.get('/voices', [
   check('locale').optional().matches(/^[a-zA-Z0-9-]+$/).isLength({ max: 15 }),
@@ -277,7 +291,8 @@ app.get('/voices', [
 
   const locale = req.query.locale;
   const gender = req.query.gender;
-  const synthesizer = new sdk.SpeechSynthesizer(speechConfig);
+  const synthesizer = new sdk.SpeechSynthesizer(config.speechConfig);
+
   try {
     const result = await synthesizer.getVoicesAsync(locale);
     if (result.reason === sdk.ResultReason.VoicesListRetrieved) {
@@ -302,16 +317,16 @@ app.get('/voices', [
   }
 });
 
-app.listen(port, () => {
-  console.log(`text2speech app listening on port: ${port}`)
-})
-
 function fileWithKeyExists(fileKey) {
   try {
-    accessSync(`${audioFileOutputDir}/${fileKey}${audioFileExtension}`, constants.F_OK);
+    accessSync(`${config.audioFileOutputDir}/${fileKey}${config.audioFileExtension}`, constants.F_OK);
   } catch (error) {
     // File was not found.
     return false;
   }
   return true;
 }
+
+app.listen(config.port, () => {
+  console.log(`text2speech app listening on port: ${config.port}`);
+});
