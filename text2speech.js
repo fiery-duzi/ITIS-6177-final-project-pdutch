@@ -322,6 +322,7 @@ function fileWithKeyExists(fileKey) {
     accessSync(`${config.audioFileOutputDir}/${fileKey}${config.audioFileExtension}`, constants.F_OK);
   } catch (error) {
     // File was not found.
+    console.log(error);
     return false;
   }
   return true;
