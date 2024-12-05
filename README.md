@@ -25,9 +25,8 @@ Retrieves a filtered list of available voices that can be used for text-to-speec
 
 The API is documented using Swagger. You can access the Swagger UI to explore the API endpoints and their details.
 
-1. Open your web browser.
-2. Navigate to `http://146.190.219.226:3000/docs`.
-3. You will see the Swagger UI where you can interact with the API endpoints and see detailed information about each one. You can even listen to the generated audio directly in Swagger without downloading the audio files to your computer!
+1. Navigate to [the Swagger docs](http://146.190.219.226:3000/docs).
+2. You will see the Swagger UI where you can interact with the API endpoints and see detailed information about each one. You can even listen to the generated audio directly in Swagger without downloading the audio files to your computer!
 
 ## How to Use the API with Postman
 
